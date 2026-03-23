@@ -46,6 +46,9 @@ class GraphIt(activity.Activity):
         self.current_challenge = None
         self.connect_mode = False
         self.hover_point = None
+        self.guide_point = None
+        self.guide_progress = 1.0
+        self._guide_anim_id = 0
         # These are updated each draw cycle via compute_step()
         self._step = 40
         self._cx   = 400
@@ -458,8 +461,11 @@ class GraphIt(activity.Activity):
 
     def _task_clicked_cb(self, btn, challenge):
         """Load the chosen challenge and switch to playing view."""
+        self._stop_guide_animation()
         self.current_challenge = challenge
         self.history.clear()
+        self.guide_point = None
+        self.guide_progress = 1.0
         self.success_label.hide()
 
         self.playing_title.set_text(challenge["name"])
@@ -473,8 +479,11 @@ class GraphIt(activity.Activity):
         self.stack.set_visible_child_name("playing")
 
     def _back_to_tasks_cb(self, btn):
+        self._stop_guide_animation()
         self.current_challenge = None
         self.history.clear()
+        self.guide_point = None
+        self.guide_progress = 1.0
         self.canvas.queue_draw()
         self.stack.set_visible_child_name("tasks")
 
@@ -503,6 +512,13 @@ class GraphIt(activity.Activity):
 
         def to_screen(x, y):
             return grid_to_screen(x, y, cx, cy, step)
+
+        def text_size(text):
+            """Support both tuple and object return types from Cairo text_extents."""
+            ext = cr.text_extents(text)
+            if hasattr(ext, "width"):
+                return ext.width, ext.height
+            return ext[2], ext[3]
 
         # ══════════════════════════════════════════════════════════════════════
         # 1. BACKGROUND
@@ -596,12 +612,12 @@ class GraphIt(activity.Activity):
 
             if i % 2 == 0:
                 lbl = str(i)
-                ext = cr.text_extents(lbl)
+                tw, th = text_size(lbl)
                 # x-axis number below tick
-                cr.move_to(lx - ext.width / 2, cy + 16)
+                cr.move_to(lx - tw / 2, cy + 16)
                 cr.show_text(lbl)
                 # y-axis number left of tick
-                cr.move_to(cx - ext.width - 8, ly + ext.height / 2)
+                cr.move_to(cx - tw - 8, ly + th / 2)
                 cr.show_text(lbl)
 
         # ── Origin "0" ────────────────────────────────────────
@@ -609,6 +625,47 @@ class GraphIt(activity.Activity):
         cr.set_source_rgba(0.50, 0.65, 0.82, 0.80)
         cr.move_to(cx + 5, cy + 14)
         cr.show_text("0")
+
+        # ── Guided coordinate travel:
+        #     origin -> (x,0) -> (x,y), plus straight origin -> (x,y)
+        #     This helps children understand axis movement before plotting.
+        if self.stack.get_visible_child_name() == "playing" and self.guide_point:
+            gx, gy = self.guide_point
+            sx0, sy0 = to_screen(0, 0)
+            sx1, sy1 = to_screen(gx, 0)
+            sx2, sy2 = to_screen(gx, gy)
+            p = max(0.0, min(1.0, self.guide_progress))
+
+            # Step 1 and Step 2 (animated dashed travel path)
+            cr.set_source_rgba(0.99, 0.82, 0.10, 0.85)
+            cr.set_line_width(3.0)
+            cr.set_dash([8.0, 6.0], 0)
+            cr.move_to(sx0, sy0)
+            if p <= 0.5:
+                px = sx0 + (sx1 - sx0) * (p / 0.5)
+                py = sy0 + (sy1 - sy0) * (p / 0.5)
+                cr.line_to(px, py)
+            else:
+                cr.line_to(sx1, sy1)
+                q = (p - 0.5) / 0.5
+                px = sx1 + (sx2 - sx1) * q
+                py = sy1 + (sy2 - sy1) * q
+                cr.line_to(px, py)
+            cr.stroke()
+            cr.set_dash([], 0)
+
+            # Final straight line from origin to the selected coordinate
+            alpha = 0.20 + (0.65 * p)
+            cr.set_source_rgba(0.20, 0.90, 1.00, alpha)
+            cr.set_line_width(2.4)
+            cr.move_to(sx0, sy0)
+            cr.line_to(sx2, sy2)
+            cr.stroke()
+
+            # Small destination marker
+            cr.set_source_rgba(0.20, 0.90, 1.00, 0.25)
+            cr.arc(sx2, sy2, 11, 0, 2 * math.pi)
+            cr.fill()
 
         # ── Grid border (thin bright rectangle around active area) ───────────
         cr.set_line_width(1.0)
@@ -703,8 +760,8 @@ class GraphIt(activity.Activity):
             cr.set_source_rgb(1, 1, 1)
             cr.set_font_size(8)
             lbl = str(idx + 1)
-            ext = cr.text_extents(lbl)
-            cr.move_to(sx - ext.width / 2, sy + ext.height / 2)
+            tw, th = text_size(lbl)
+            cr.move_to(sx - tw / 2, sy + th / 2)
             cr.show_text(lbl)
 
             # coordinate label outside circle
@@ -749,9 +806,30 @@ class GraphIt(activity.Activity):
 
     def _add_point(self, x, y):
         self.history.add(x, y)
+        self.guide_point = (x, y)
+        self._start_guide_animation()
         self._refresh_points_list()
         self.canvas.queue_draw()
         self._check_completion()
+
+    def _start_guide_animation(self):
+        self._stop_guide_animation()
+        self.guide_progress = 0.0
+
+        def tick():
+            self.guide_progress = min(1.0, self.guide_progress + 0.04)
+            self.canvas.queue_draw()
+            if self.guide_progress >= 1.0:
+                self._guide_anim_id = 0
+                return False
+            return True
+
+        self._guide_anim_id = GLib.timeout_add(16, tick)
+
+    def _stop_guide_animation(self):
+        if self._guide_anim_id:
+            GLib.source_remove(self._guide_anim_id)
+            self._guide_anim_id = 0
 
     def _manual_plot_cb(self, widget):
         raw_x = self.x_entry.get_text().strip()
@@ -777,12 +855,18 @@ class GraphIt(activity.Activity):
         GLib.timeout_add(2500, lambda: self.playing_hint.set_text(orig) or False)
 
     def _undo_cb(self, btn):
+        self._stop_guide_animation()
         self.history.undo()
+        self.guide_point = self.history[-1] if len(self.history) else None
+        self.guide_progress = 1.0
         self._refresh_points_list()
         self.canvas.queue_draw()
 
     def _clear_cb(self, btn):
+        self._stop_guide_animation()
         self.history.clear()
+        self.guide_point = None
+        self.guide_progress = 1.0
         self.success_label.hide()
         self._refresh_points_list()
         self.canvas.queue_draw()

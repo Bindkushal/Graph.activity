@@ -46,6 +46,7 @@ class GraphIt(activity.Activity):
         self.current_challenge = None
         self.connect_mode = False
         self.hover_point = None
+        self.guide_point = None
         # These are updated each draw cycle via compute_step()
         self._step = 40
         self._cx   = 400
@@ -460,6 +461,7 @@ class GraphIt(activity.Activity):
         """Load the chosen challenge and switch to playing view."""
         self.current_challenge = challenge
         self.history.clear()
+        self.guide_point = None
         self.success_label.hide()
 
         self.playing_title.set_text(challenge["name"])
@@ -475,6 +477,7 @@ class GraphIt(activity.Activity):
     def _back_to_tasks_cb(self, btn):
         self.current_challenge = None
         self.history.clear()
+        self.guide_point = None
         self.canvas.queue_draw()
         self.stack.set_visible_child_name("tasks")
 
@@ -609,6 +612,37 @@ class GraphIt(activity.Activity):
         cr.set_source_rgba(0.50, 0.65, 0.82, 0.80)
         cr.move_to(cx + 5, cy + 14)
         cr.show_text("0")
+
+        # ── Guided coordinate travel:
+        #     origin -> (x,0) -> (x,y), plus straight origin -> (x,y)
+        #     This helps children understand axis movement before plotting.
+        if self.stack.get_visible_child_name() == "playing" and self.guide_point:
+            gx, gy = self.guide_point
+            sx0, sy0 = to_screen(0, 0)
+            sx1, sy1 = to_screen(gx, 0)
+            sx2, sy2 = to_screen(gx, gy)
+
+            # Step 1 and Step 2 (dashed travel path)
+            cr.set_source_rgba(0.99, 0.82, 0.10, 0.85)
+            cr.set_line_width(3.0)
+            cr.set_dash([8.0, 6.0], 0)
+            cr.move_to(sx0, sy0)
+            cr.line_to(sx1, sy1)
+            cr.line_to(sx2, sy2)
+            cr.stroke()
+            cr.set_dash([], 0)
+
+            # Final straight line from origin to the selected coordinate
+            cr.set_source_rgba(0.20, 0.90, 1.00, 0.85)
+            cr.set_line_width(2.4)
+            cr.move_to(sx0, sy0)
+            cr.line_to(sx2, sy2)
+            cr.stroke()
+
+            # Small destination marker
+            cr.set_source_rgba(0.20, 0.90, 1.00, 0.25)
+            cr.arc(sx2, sy2, 11, 0, 2 * math.pi)
+            cr.fill()
 
         # ── Grid border (thin bright rectangle around active area) ───────────
         cr.set_line_width(1.0)
@@ -749,6 +783,7 @@ class GraphIt(activity.Activity):
 
     def _add_point(self, x, y):
         self.history.add(x, y)
+        self.guide_point = (x, y)
         self._refresh_points_list()
         self.canvas.queue_draw()
         self._check_completion()
@@ -778,11 +813,13 @@ class GraphIt(activity.Activity):
 
     def _undo_cb(self, btn):
         self.history.undo()
+        self.guide_point = self.history[-1] if len(self.history) else None
         self._refresh_points_list()
         self.canvas.queue_draw()
 
     def _clear_cb(self, btn):
         self.history.clear()
+        self.guide_point = None
         self.success_label.hide()
         self._refresh_points_list()
         self.canvas.queue_draw()

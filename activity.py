@@ -490,6 +490,35 @@ class GraphIt(activity.Activity):
     # ── Drawing ───────────────────────────────────────────────────────────────
 
     def _draw_cb(self, widget, cr):
+        """
+        Keep drawing robust in Sugar runtime.
+        If rendering throws, paint a clear fallback instead of a blank gray area.
+        """
+        try:
+            self._draw_scene(widget, cr)
+        except Exception as err:
+            print(f"GraphIt draw error: {err}")
+            self._draw_fallback(widget, cr)
+        return False
+
+    def _draw_fallback(self, widget, cr):
+        """Draw a visible fallback panel if the main draw pipeline fails."""
+        alloc = widget.get_allocation()
+        w, h = alloc.width, alloc.height
+        cr.set_source_rgb(0.12, 0.14, 0.18)
+        cr.rectangle(0, 0, w, h)
+        cr.fill()
+        cr.set_source_rgb(1.0, 0.35, 0.35)
+        cr.select_font_face("Sans", 0, 1)
+        cr.set_font_size(16)
+        cr.move_to(16, 32)
+        cr.show_text("Graph rendering failed")
+        cr.select_font_face("Sans", 0, 0)
+        cr.set_font_size(12)
+        cr.move_to(16, 54)
+        cr.show_text("Check logs for details.")
+
+    def _draw_scene(self, widget, cr):
         alloc = widget.get_allocation()
         W, H = alloc.width, alloc.height
 
